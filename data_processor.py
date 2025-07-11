@@ -268,7 +268,7 @@ class SpotifyDataProcessor:
             listening_by_hour = history.get("listening_by_hour", {})
             if listening_by_hour:
                 peak_hour = max(listening_by_hour.items(), key=lambda x: x[1])[0]
-                insights.append(f"Your peak listening time is {peak_hour}:00")
+                insights.append(f"Your peak listening time is around {peak_hour}:00")
         
         # Genre diversity
         genre_info = processed_data.get("genre_diversity", {})
