@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
 import requests
 import os
 from urllib.parse import urlencode
@@ -14,10 +15,19 @@ load_dotenv()
 
 app = FastAPI(title="Spotify Stats API")
 
+# Add CORS middleware for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Vite dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Spotify configuration
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-SPOTIFY_REDIRECT_URI = "http://localhost:8000/callback"
+SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8000/callback"
 SPOTIFY_SCOPE = "user-read-private user-read-email user-top-read user-read-recently-played user-library-read"
 
 @app.get("/")
@@ -40,12 +50,12 @@ async def login():
 
 @app.get("/callback")
 async def callback(code: str = None, error: str = None):
-    """Handle Spotify OAuth callback"""
+    """Handle Spotify OAuth callback and redirect to frontend with token"""
     if error:
-        raise HTTPException(status_code=400, detail=f"Spotify auth error: {error}")
+        return RedirectResponse(url=f"http://localhost:5173?error={error}")
     
     if not code:
-        raise HTTPException(status_code=400, detail="No authorization code received")
+        return RedirectResponse(url="http://localhost:5173?error=no_code")
     
     # Exchange code for access token
     auth_header = base64.b64encode(f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()).decode()
@@ -64,24 +74,13 @@ async def callback(code: str = None, error: str = None):
     response = requests.post("https://accounts.spotify.com/api/token", headers=headers, data=data)
     
     if response.status_code != 200:
-        raise HTTPException(status_code=400, detail="Failed to get access token")
+        return RedirectResponse(url="http://localhost:5173?error=token_failed")
     
     token_data = response.json()
     access_token = token_data["access_token"]
     
-    # Get user profile to test the token
-    client = SpotifyClient(access_token)
-    user_data = client.get_user_profile()
-    
-    return {
-        "message": "Successfully authenticated with Spotify",
-        "user": {
-            "id": user_data["id"],
-            "name": user_data["display_name"],
-            "email": user_data["email"]
-        },
-        "access_token": access_token  # Don't return this in production
-    }
+    # Redirect to frontend with the access token
+    return RedirectResponse(url=f"http://localhost:5173?access_token={access_token}")
 
 # New comprehensive analysis endpoint
 @app.get("/user/analysis")
