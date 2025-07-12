@@ -79,8 +79,59 @@ async def callback(code: str = None, error: str = None):
     token_data = response.json()
     access_token = token_data["access_token"]
     
-    # Redirect to frontend with the access token
-    return RedirectResponse(url=f"http://localhost:5173?access_token={access_token}")
+    # Include additional token info for frontend
+    refresh_token = token_data.get("refresh_token", "")
+    expires_in = token_data.get("expires_in", 3600)
+    
+    # Redirect to frontend with the access token and expiry info
+    return RedirectResponse(url=f"http://localhost:5173?access_token={access_token}&refresh_token={refresh_token}&expires_in={expires_in}")
+
+# Token validation endpoint
+@app.get("/validate-token")
+async def validate_token(access_token: str):
+    """Validate if the access token is still valid"""
+    try:
+        # Try to get user profile to validate token
+        headers = {"Authorization": f"Bearer {access_token}"}
+        response = requests.get("https://api.spotify.com/v1/me", headers=headers)
+        
+        if response.status_code == 200:
+            return {"valid": True, "user": response.json()}
+        else:
+            return {"valid": False, "error": "Invalid token"}
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+# Token refresh endpoint
+@app.post("/refresh-token")
+async def refresh_token(refresh_token: str):
+    """Refresh the access token using refresh token"""
+    try:
+        auth_header = base64.b64encode(f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()).decode()
+        
+        headers = {
+            "Authorization": f"Basic {auth_header}",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token
+        }
+        
+        response = requests.post("https://accounts.spotify.com/api/token", headers=headers, data=data)
+        
+        if response.status_code == 200:
+            token_data = response.json()
+            return {
+                "access_token": token_data["access_token"],
+                "expires_in": token_data.get("expires_in", 3600),
+                "refresh_token": token_data.get("refresh_token", refresh_token)  # Sometimes not returned
+            }
+        else:
+            raise HTTPException(status_code=400, detail="Failed to refresh token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Token refresh failed: {str(e)}")
 
 # New comprehensive analysis endpoint
 @app.get("/user/analysis")

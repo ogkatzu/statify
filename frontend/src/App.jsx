@@ -3,24 +3,130 @@ import './App.css'
 
 function App() {
   const [accessToken, setAccessToken] = useState(null)
+  const [refreshToken, setRefreshToken] = useState(null)
   const [userData, setUserData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
 
-  // Check for access token in URL (from OAuth callback)
+  // Initialize authentication state on app load
   useEffect(() => {
+    // Check for token in localStorage first
+    const storedToken = localStorage.getItem('spotify_access_token')
+    const storedRefreshToken = localStorage.getItem('spotify_refresh_token')
+    const storedUserData = localStorage.getItem('spotify_user_data')
+    const tokenExpiry = localStorage.getItem('spotify_token_expiry')
+    
+    // Check if stored token is still valid
+    if (storedToken && tokenExpiry) {
+      const currentTime = new Date().getTime()
+      const expiryTime = parseInt(tokenExpiry)
+      
+      if (currentTime < expiryTime) {
+        // Token is still valid
+        setAccessToken(storedToken)
+        setRefreshToken(storedRefreshToken)
+        setIsAuthenticated(true)
+        
+        // Load cached user data if available
+        if (storedUserData) {
+          try {
+            setUserData(JSON.parse(storedUserData))
+          } catch (e) {
+            console.warn('Failed to parse stored user data')
+            localStorage.removeItem('spotify_user_data')
+          }
+        }
+      } else if (storedRefreshToken) {
+        // Token expired but we have refresh token, try to refresh
+        attemptTokenRefresh(storedRefreshToken)
+      } else {
+        // Clear expired token data
+        clearStoredAuth()
+      }
+    }
+    
+    // Check for access token in URL (from OAuth callback)
     const urlParams = new URLSearchParams(window.location.search)
-    const token = urlParams.get('access_token')
-    if (token) {
-      setAccessToken(token)
+    const urlToken = urlParams.get('access_token')
+    const urlRefreshToken = urlParams.get('refresh_token')
+    const urlExpiresIn = urlParams.get('expires_in')
+    
+    if (urlToken) {
+      // Store new token with proper expiry
+      const expiresInSeconds = urlExpiresIn ? parseInt(urlExpiresIn) : 3600
+      const expiryTime = new Date().getTime() + (expiresInSeconds * 1000)
+      
+      localStorage.setItem('spotify_access_token', urlToken)
+      localStorage.setItem('spotify_token_expiry', expiryTime.toString())
+      
+      if (urlRefreshToken) {
+        localStorage.setItem('spotify_refresh_token', urlRefreshToken)
+      }
+      
+      setAccessToken(urlToken)
+      setRefreshToken(urlRefreshToken)
+      setIsAuthenticated(true)
+      
       // Clean up URL
       window.history.replaceState({}, document.title, window.location.pathname)
     }
   }, [])
 
+  // Attempt to refresh token
+  const attemptTokenRefresh = async (refreshTokenToUse) => {
+    try {
+      const response = await fetch('http://localhost:8000/refresh-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `refresh_token=${refreshTokenToUse}`
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        const expiryTime = new Date().getTime() + (data.expires_in * 1000)
+        
+        localStorage.setItem('spotify_access_token', data.access_token)
+        localStorage.setItem('spotify_token_expiry', expiryTime.toString())
+        
+        if (data.refresh_token) {
+          localStorage.setItem('spotify_refresh_token', data.refresh_token)
+        }
+        
+        setAccessToken(data.access_token)
+        setRefreshToken(data.refresh_token || refreshTokenToUse)
+        setIsAuthenticated(true)
+      } else {
+        // Refresh failed, clear all auth data
+        clearStoredAuth()
+      }
+    } catch (error) {
+      console.error('Token refresh failed:', error)
+      clearStoredAuth()
+    }
+  }
+
+  // Clear stored authentication data
+  const clearStoredAuth = () => {
+    localStorage.removeItem('spotify_access_token')
+    localStorage.removeItem('spotify_refresh_token')
+    localStorage.removeItem('spotify_user_data')
+    localStorage.removeItem('spotify_token_expiry')
+  }
+
   // Login with Spotify
   const handleLogin = () => {
     window.location.href = 'http://localhost:8000/login'
+  }
+
+  // Logout function
+  const handleLogout = () => {
+    clearStoredAuth()
+    setAccessToken(null)
+    setRefreshToken(null)
+    setUserData(null)
+    setIsAuthenticated(false)
+    setError(null)
   }
 
   // Fetch user analysis
@@ -39,6 +145,9 @@ function App() {
 
       const data = await response.json()
       setUserData(data)
+      
+      // Cache user data in localStorage
+      localStorage.setItem('spotify_user_data', JSON.stringify(data))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -46,15 +155,15 @@ function App() {
     }
   }
 
-  // Auto-fetch analysis when we get a token
+  // Auto-fetch analysis when we get a token (only if we don't have cached data)
   useEffect(() => {
-    if (accessToken) {
+    if (accessToken && !userData) {
       fetchAnalysis()
     }
   }, [accessToken])
 
   // Login Screen
-  if (!accessToken) {
+  if (!isAuthenticated) {
     return (
       <div className="app">
         <div className="login-container">
@@ -100,7 +209,7 @@ function App() {
   if (userData) {
     return (
       <div className="app">
-        <Dashboard userData={userData} onRefresh={fetchAnalysis} />
+        <Dashboard userData={userData} onRefresh={fetchAnalysis} onLogout={handleLogout} />
       </div>
     )
   }
@@ -109,7 +218,7 @@ function App() {
 }
 
 // Simple Dashboard Component
-function Dashboard({ userData, onRefresh }) {
+function Dashboard({ userData, onRefresh, onLogout }) {
   const uniqueness = userData.uniqueness_score || {}
   const profile = userData.user_profile || {}
   const listeningHistory = userData.listening_history || {}
@@ -120,9 +229,14 @@ function Dashboard({ userData, onRefresh }) {
     <div className="dashboard">
       <header className="dashboard-header">
         <h1>Hi {profile.name}! 👋</h1>
-        <button onClick={onRefresh} className="refresh-button">
-          Refresh Data
-        </button>
+        <div className="header-actions">
+          <button onClick={onRefresh} className="refresh-button">
+            Refresh Data
+          </button>
+          <button onClick={onLogout} className="logout-button">
+            Logout
+          </button>
+        </div>
       </header>
 
       {/* Hero Section - Uniqueness Score */}
@@ -238,9 +352,9 @@ function Dashboard({ userData, onRefresh }) {
                   <div className="duration">
                     {Math.floor(track.duration_ms / 60000)}:{String(Math.floor((track.duration_ms % 60000) / 1000)).padStart(2, '0')}
                   </div>
-                  <div className="popularity-indicator">
+                  {/* <div className="popularity-indicator">
                     {track.popularity > 70 ? '🔥' : track.popularity > 40 ? '⭐' : '💎'}
-                  </div>
+                  </div> */}
                 </div>
               </div>
             ))}
