@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 import requests
@@ -11,9 +11,20 @@ from dotenv import load_dotenv
 from spotify_client import SpotifyClient
 from data_processor import SpotifyDataProcessor
 
+# Database imports
+from database import get_db, create_tables
+from models import User, UserToken, UserAnalysis
+from sqlalchemy.orm import Session
+from db_service import DatabaseService
+
 load_dotenv()
 
 app = FastAPI(title="Spotify Stats API")
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    create_tables()
 
 # Add CORS middleware for frontend
 app.add_middleware(
@@ -49,7 +60,7 @@ async def login():
     return RedirectResponse(url=auth_url)
 
 @app.get("/callback")
-async def callback(code: str = None, error: str = None):
+async def callback(code: str = None, error: str = None, db: Session = Depends(get_db)):
     """Handle Spotify OAuth callback and redirect to frontend with token"""
     if error:
         return RedirectResponse(url=f"http://localhost:5173?error={error}")
@@ -78,10 +89,22 @@ async def callback(code: str = None, error: str = None):
     
     token_data = response.json()
     access_token = token_data["access_token"]
-    
-    # Include additional token info for frontend
     refresh_token = token_data.get("refresh_token", "")
     expires_in = token_data.get("expires_in", 3600)
+    
+    try:
+        # Get user profile from Spotify
+        client = SpotifyClient(access_token)
+        user_profile = client.get_user_profile()
+        
+        # Store user and tokens in database
+        db_service = DatabaseService(db)
+        user = db_service.get_or_create_user(user_profile)
+        db_service.store_user_tokens(user.spotify_user_id, access_token, refresh_token, expires_in)
+        
+    except Exception as e:
+        print(f"Database operation failed: {e}")
+        # Continue without database storage for now
     
     # Redirect to frontend with the access token and expiry info
     return RedirectResponse(url=f"http://localhost:5173?access_token={access_token}&refresh_token={refresh_token}&expires_in={expires_in}")
@@ -135,11 +158,12 @@ async def refresh_token(refresh_token: str):
 
 # New comprehensive analysis endpoint
 @app.get("/user/analysis")
-async def get_user_analysis(access_token: str, days_back: int = 30):
+async def get_user_analysis(access_token: str, days_back: int = 30, db: Session = Depends(get_db)):
     """Get comprehensive user music analysis"""
     try:
         client = SpotifyClient(access_token)
         processor = SpotifyDataProcessor()
+        db_service = DatabaseService(db)
         
         # Gather all data
         print("Fetching user data...")
@@ -199,6 +223,14 @@ async def get_user_analysis(access_token: str, days_back: int = 30):
         # Generate insights
         analysis["insights"] = processor.generate_insights(analysis)
         
+        # Store analysis in database
+        try:
+            user = db_service.get_or_create_user(user_profile)
+            db_service.store_analysis(user.spotify_user_id, analysis)
+        except Exception as e:
+            print(f"Failed to store analysis in database: {e}")
+            # Continue without database storage
+        
         return analysis
         
     except Exception as e:
@@ -256,6 +288,38 @@ async def get_recent_tracks(access_token: str, limit: int = 50):
     client = SpotifyClient(access_token)
     tracks = client.get_recently_played(limit)
     return {"tracks": tracks}
+
+@app.get("/user/analysis-history")
+async def get_analysis_history(access_token: str, limit: int = 10, db: Session = Depends(get_db)):
+    """Get user's analysis history from database"""
+    try:
+        # Validate token and get user
+        client = SpotifyClient(access_token)
+        user_profile = client.get_user_profile()
+        
+        db_service = DatabaseService(db)
+        analyses = db_service.get_user_analysis_history(user_profile["id"], limit)
+        
+        # Convert to JSON-serializable format
+        history = []
+        for analysis in analyses:
+            history.append({
+                "id": analysis.id,
+                "analysis_date": analysis.analysis_date.isoformat(),
+                "uniqueness_score": analysis.uniqueness_score,
+                "uniqueness_rating": analysis.uniqueness_rating,
+                "genre_diversity_score": analysis.genre_diversity_score,
+                "obscurity_score": analysis.obscurity_score,
+                "total_tracks_played": analysis.total_tracks_played,
+                "unique_artists": analysis.unique_artists,
+                "unique_genres": analysis.unique_genres
+            })
+        
+        return {"history": history}
+        
+    except Exception as e:
+        print(f"Failed to get analysis history: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get history: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
