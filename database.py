@@ -3,9 +3,12 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 import os
 from models import Base
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
 
 # Database URL from environment
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://statify_user:statify_password@localhost:5432/statify")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://statify_user:statify_password@statify_postgres:5432/statify")
 
 # Handle Heroku postgres URL format
 if DATABASE_URL.startswith("postgres://"):

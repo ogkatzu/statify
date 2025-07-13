@@ -26,10 +26,14 @@ app = FastAPI(title="Spotify Stats API")
 async def startup_event():
     create_tables()
 
+# Configuration
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+
 # Add CORS middleware for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite dev server
+    allow_origins=[FRONTEND_URL],  # Dynamic frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -38,7 +42,7 @@ app.add_middleware(
 # Spotify configuration
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8000/callback"
+SPOTIFY_REDIRECT_URI = f"{BACKEND_URL}/callback"
 SPOTIFY_SCOPE = "user-read-private user-read-email user-top-read user-read-recently-played user-library-read"
 
 @app.get("/")
@@ -63,10 +67,10 @@ async def login():
 async def callback(code: str = None, error: str = None, db: Session = Depends(get_db)):
     """Handle Spotify OAuth callback and redirect to frontend with token"""
     if error:
-        return RedirectResponse(url=f"http://localhost:5173?error={error}")
+        return RedirectResponse(url=f"{FRONTEND_URL}?error={error}")
     
     if not code:
-        return RedirectResponse(url="http://localhost:5173?error=no_code")
+        return RedirectResponse(url=f"{FRONTEND_URL}?error=no_code")
     
     # Exchange code for access token
     auth_header = base64.b64encode(f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()).decode()
@@ -85,7 +89,7 @@ async def callback(code: str = None, error: str = None, db: Session = Depends(ge
     response = requests.post("https://accounts.spotify.com/api/token", headers=headers, data=data)
     
     if response.status_code != 200:
-        return RedirectResponse(url="http://localhost:5173?error=token_failed")
+        return RedirectResponse(url=f"{FRONTEND_URL}?error=token_failed")
     
     token_data = response.json()
     access_token = token_data["access_token"]
@@ -107,7 +111,7 @@ async def callback(code: str = None, error: str = None, db: Session = Depends(ge
         # Continue without database storage for now
     
     # Redirect to frontend with the access token and expiry info
-    return RedirectResponse(url=f"http://localhost:5173?access_token={access_token}&refresh_token={refresh_token}&expires_in={expires_in}")
+    return RedirectResponse(url=f"{FRONTEND_URL}?access_token={access_token}&refresh_token={refresh_token}&expires_in={expires_in}")
 
 # Token validation endpoint
 @app.get("/validate-token")

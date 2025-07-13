@@ -19,6 +19,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - statify_network
 
   # Optional: pgAdmin for database management
   pgadmin:
@@ -33,7 +35,40 @@ services:
       - postgres
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - statify_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: statify_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - statify_network
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: statify_backend
+    environment:
+      - DATABASE_URL=postgresql://statify_user:statify_password@postgres:5432/statify
+      - FRONTEND_URL=http://localhost:3000
+      - BACKEND_URL=http://127.0.0.1:8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - statify_network
+
 networks:
+  statify_network:
+    driver: bridge
 
 volumes:
   postgres_data:
